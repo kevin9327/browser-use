@@ -8,6 +8,7 @@ We officially support the following LLMs:
 - Groq
 - Ollama
 - DeepSeek
+- Qwen3.8-27B local GGUF (`ChatQwen38`)
 
 ## Migrating from LangChain
 

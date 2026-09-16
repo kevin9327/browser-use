@@ -226,3 +226,34 @@ from browser_use import Agent
 
 llm = ChatOllama(model="llama3.1:8b")
 ```
+
+## Qwen3.8-27B (local GGUF)
+
+Use the official [`Qwen/Qwen3.8-27B`](https://huggingface.co/Qwen/Qwen3.8-27B) weights via bartowski's llama.cpp imatrix GGUFs (`b10896+` for the `qwen35` Gated DeltaNet graph). Refresh the live catalog and start every language quant as an OpenAI-compatible `llama-server`:
+
+```bash
+uv run python -m browser_use.llm.qwen38 refresh
+uv run python -m browser_use.llm.qwen38 serve --all
+```
+
+Then point the agent at the alias for the quant you want (`Q4_K_M` is the recommended default; ports start at 8080 in quality order, so `Q4_K_M` is `:8089`):
+
+```python
+from browser_use.llm import ChatQwen38
+from browser_use import Agent
+
+llm = ChatQwen38(quant="Q4_K_M")  # http://127.0.0.1:8080/v1 , thinking mode on
+
+agent = Agent(
+    task="Your task here",
+    llm=llm,
+)
+```
+
+Ollama's official tag also works if you already pulled it:
+
+```python
+llm = ChatQwen38(quant="qwen3.8:27b", base_url="http://127.0.0.1:11434/v1")
+```
+
+`serve --all` skips quants that do not fit RAM+VRAM and writes `~/.cache/browser-use/qwen38/start-all-qwen38-quants.sh` for a GPU box. Pass `--force` to spawn anyway. Vision needs the `mmproj` file llama.cpp pulls automatically with `-hf`.

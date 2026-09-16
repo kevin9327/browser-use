@@ -50,6 +50,7 @@ if TYPE_CHECKING:
 	from browser_use.llm.groq.chat import ChatGroq
 	from browser_use.llm.ollama.chat import ChatOllama
 	from browser_use.llm.openai.chat import ChatOpenAI
+	from browser_use.llm.qwen38.chat import ChatQwen38
 
 
 # Lazy imports mapping - only import when actually accessed
@@ -80,6 +81,7 @@ _LAZY_IMPORTS = {
 	'ChatGroq': ('browser_use.llm.groq.chat', 'ChatGroq'),
 	'ChatAzureOpenAI': ('browser_use.llm.azure.chat', 'ChatAzureOpenAI'),
 	'ChatOllama': ('browser_use.llm.ollama.chat', 'ChatOllama'),
+	'ChatQwen38': ('browser_use.llm.qwen38.chat', 'ChatQwen38'),
 }
 
 
@@ -122,4 +124,5 @@ __all__ = [
 	'ChatGroq',
 	'ChatAzureOpenAI',
 	'ChatOllama',
+	'ChatQwen38',
 ]

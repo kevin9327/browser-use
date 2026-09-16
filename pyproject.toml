@@ -94,6 +94,7 @@ Repository = "https://github.com/browser-use/browser-use"
 [project.scripts]
 browseruse = "browser_use.cli:main"
 browser-use = "browser_use.cli:main"
+qwen38-local = "browser_use.llm.qwen38.__main__:main"
 
 [build-system]
 requires = ["hatchling"]
