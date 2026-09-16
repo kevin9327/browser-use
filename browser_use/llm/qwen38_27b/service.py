@@ -19,6 +19,8 @@ import sys
 from collections.abc import Awaitable, Callable
 from typing import Literal
 
+import psutil
+
 from browser_use.llm.base import BaseChatModel
 from browser_use.llm.ollama.chat import ChatOllama
 from browser_use.llm.openai.chat import ChatOpenAI
@@ -26,8 +28,8 @@ from browser_use.llm.qwen38_27b.views import (
 	DEFAULT_NUM_CTX,
 	DEFAULT_OLLAMA_TAG,
 	DEFAULT_VLLM_BASE_URL,
-	CommandResult,
 	OFFICIAL_QUANTIZED_MODELS,
+	CommandResult,
 	QuantStartResult,
 	Qwen3827BQuant,
 	StartReport,
@@ -39,6 +41,7 @@ RunFn = Callable[..., Awaitable[CommandResult]]
 WhichFn = Callable[[str], str | None]
 HealthFn = Callable[[], bool | Awaitable[bool]]
 CudaFn = Callable[[], bool]
+RamFn = Callable[[], float]
 
 _QWEN38_NAME_RE = re.compile(r'qwen3[\._-]?8')
 _FOLD_RE = re.compile(r'[^a-z0-9]+')
@@ -123,8 +126,7 @@ def resolve_quant_tag(name: str) -> str:
 		assert tag
 		return tag
 	raise ValueError(
-		f"Unknown Qwen3.8-27B quant '{name}'. "
-		f'Known: default, q4_K_M, q8_0, mtp-q4_K_M, mtp-q8_0, mlx, mxfp8, nvfp4, fp8'
+		f"Unknown Qwen3.8-27B quant '{name}'. Known: default, q4_K_M, q8_0, mtp-q4_K_M, mtp-q8_0, mlx, mxfp8, nvfp4, fp8"
 	)
 
 
@@ -195,6 +197,10 @@ def _default_cuda_available() -> bool:
 	return shutil.which('nvidia-smi') is not None
 
 
+def _available_ram_gb() -> float:
+	return psutil.virtual_memory().available / (1024**3)
+
+
 class Qwen3827BLocalRuntime:
 	"""Installs/starts Ollama, pulls every compatible official quant, optionally vLLM FP8."""
 
@@ -206,6 +212,7 @@ class Qwen3827BLocalRuntime:
 		run: RunFn | None = None,
 		cuda_available: CudaFn | None = None,
 		healthcheck: HealthFn | None = None,
+		available_ram_gb: RamFn | None = None,
 		host: str = 'http://127.0.0.1:11434',
 	) -> None:
 		self.platform_name = platform_name or sys.platform
@@ -213,6 +220,7 @@ class Qwen3827BLocalRuntime:
 		self._run = run or self._run_command
 		self.cuda_available = cuda_available or _default_cuda_available
 		self._healthcheck = healthcheck
+		self.available_ram_gb = available_ram_gb or _available_ram_gb
 		self.host = host
 
 	async def _run_command(self, argv: list[str], timeout: float | None = None) -> CommandResult:
@@ -335,10 +343,14 @@ class Qwen3827BLocalRuntime:
 				continue
 			action: Literal['pulled', 'loaded'] = 'pulled'
 			if load_default and tag == DEFAULT_OLLAMA_TAG:
-				payload = json.dumps({'model': tag, 'prompt': 'ok', 'keep_alive': '30m'})
-				loaded = await self._run(['curl', '-fsS', f'{self.host}/api/generate', '-d', payload])
-				if loaded.returncode == 0:
-					action = 'loaded'
+				# 27B Q4 is ~18GB; refuse to load when it would OOM the box.
+				if self.available_ram_gb() < 20:
+					_log_skip(tag, f'not enough RAM to load (~18GB weights, {self.available_ram_gb():.1f}GB free)')
+				else:
+					payload = json.dumps({'model': tag, 'prompt': 'ok', 'keep_alive': '30m'})
+					loaded = await self._run(['curl', '-fsS', f'{self.host}/api/generate', '-d', payload])
+					if loaded.returncode == 0:
+						action = 'loaded'
 			results.append(QuantStartResult(tag=tag, action=action))
 
 		fp8 = next(spec for spec in OFFICIAL_QUANTIZED_MODELS if spec.runtime == 'vllm')

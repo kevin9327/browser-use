@@ -17,7 +17,7 @@ from browser_use.llm.qwen38_27b.service import (
 	resolve_quant_tag,
 	select_quants_for_platform,
 )
-from browser_use.llm.qwen38_27b.views import CommandResult, OFFICIAL_QUANTIZED_MODELS
+from browser_use.llm.qwen38_27b.views import OFFICIAL_QUANTIZED_MODELS, CommandResult
 
 
 def test_catalog_is_original_quantized_qwen38_27b_only():
@@ -137,18 +137,22 @@ async def test_start_all_pulls_every_linux_quant_and_loads_the_default():
 		run=fake_run,
 		cuda_available=lambda: False,
 		healthcheck=lambda: True,
+		available_ram_gb=lambda: 64.0,
 	)
 	report = await runtime.start_all()
 
-	pulls = [' '.join(argv) for argv in calls if argv[:2] == ['ollama', 'pull']]
+	pulls = [' '.join(argv[1:]) for argv in calls if len(argv) >= 3 and argv[1] == 'pull']
 	assert pulls == [
-		'ollama pull qwen3.8:27b',
-		'ollama pull qwen3.8:27b-q4_K_M',
-		'ollama pull qwen3.8:27b-q8_0',
-		'ollama pull qwen3.8:27b-mtp-q4_K_M',
-		'ollama pull qwen3.8:27b-mtp-q8_0',
+		'pull qwen3.8:27b',
+		'pull qwen3.8:27b-q4_K_M',
+		'pull qwen3.8:27b-q8_0',
+		'pull qwen3.8:27b-mtp-q4_K_M',
+		'pull qwen3.8:27b-mtp-q8_0',
 	]
-	assert any(argv[:2] == ['ollama', 'serve'] or argv[0].endswith('ollama') and 'serve' in argv for argv in calls) or report.ollama_running
+	assert (
+		any(argv[:2] == ['ollama', 'serve'] or argv[0].endswith('ollama') and 'serve' in argv for argv in calls)
+		or report.ollama_running
+	)
 	assert {result.tag for result in report.results if result.action == 'pulled'} >= {
 		'qwen3.8:27b-q4_K_M',
 		'qwen3.8:27b-q8_0',
