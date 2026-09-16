@@ -355,8 +355,13 @@ _cmd_verify() {
 	_log 'Running install-level CI tests...'
 	if uv run pytest -q "$(_repo_root)/tests/ci/models/test_qwen38_local_setup.py" \
 		-k 'test_setup_script or test_tier_models or test_status_script or test_doctor'; then
-		_log 'VERIFY: install OK + CI passed; run e2e on 20GB+ machine.'
-		return 0
+		_log 'Running browser stack smoke (no LLM)...'
+		if uv run python "${BASH_SOURCE%/*}/test-qwen38-browser.py"; then
+			_log 'VERIFY: install OK + CI + browser passed; run e2e on 20GB+ for LLM inference.'
+			return 0
+		fi
+		_log 'FAIL: browser smoke test failed'
+		return 1
 	fi
 	_log 'FAIL: install-level CI tests failed'
 	return 1
