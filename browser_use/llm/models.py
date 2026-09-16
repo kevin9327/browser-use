@@ -85,6 +85,8 @@ bu_1_0: 'BaseChatModel'
 bu_2_0: 'BaseChatModel'
 bu_2_0_mini_preview: 'BaseChatModel'
 
+ollama_qwen38_27b: 'BaseChatModel'
+
 
 def get_llm_by_name(model_name: str):
 	"""
@@ -213,6 +215,15 @@ def get_llm_by_name(model_name: str):
 		api_key = os.getenv('CEREBRAS_API_KEY')
 		return ChatCerebras(model=model, api_key=api_key)
 
+	# Ollama Models (local). Qwen3.8-27B aliases resolve to official library tags.
+	elif provider == 'ollama':
+		from browser_use.llm.ollama.chat import ChatOllama
+		from browser_use.llm.qwen38_27b.service import chat_qwen38_27b, is_qwen38_27b_name
+
+		if is_qwen38_27b_name(model_part):
+			return chat_qwen38_27b(quant=model_part)
+		return ChatOllama(model=model)
+
 	# Browser Use Models
 	elif provider == 'bu':
 		# Handle bu_latest -> bu-latest conversion (need to prepend 'bu-' back)
@@ -221,7 +232,7 @@ def get_llm_by_name(model_name: str):
 		return ChatBrowserUse(model=model, api_key=api_key)
 
 	else:
-		available_providers = ['openai', 'azure', 'google', 'anthropic', 'mistral', 'oci', 'cerebras', 'bu']
+		available_providers = ['openai', 'azure', 'google', 'anthropic', 'mistral', 'oci', 'cerebras', 'bu', 'ollama']
 		raise ValueError(f"Unknown provider: '{provider}'. Available providers: {', '.join(available_providers)}")
 
 
@@ -322,6 +333,8 @@ __all__ += [
 	'bu_1_0',
 	'bu_2_0',
 	'bu_2_0_mini_preview',
+	# Local official Qwen3.8-27B (Ollama)
+	'ollama_qwen38_27b',
 ]
 
 # NOTE: OCI backend is optional. The try/except ImportError and conditional __all__ are required

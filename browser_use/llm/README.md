@@ -6,7 +6,7 @@ We officially support the following LLMs:
 - Anthropic
 - Google
 - Groq
-- Ollama
+- Ollama (including official local Qwen3.8-27B quants — `python -m browser_use.llm.qwen38_27b start`)
 - DeepSeek
 
 - Mistral

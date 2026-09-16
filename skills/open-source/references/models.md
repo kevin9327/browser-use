@@ -208,10 +208,25 @@ llm = ChatCerebras(model="llama3.3-70b")
 
 ## Ollama (Local)
 
+Official local Qwen3.8-27B quants (Ollama GGUF Q4_K_M / Q8_0 / MTP, plus Apple MLX tags and Qwen's own FP8 for vLLM):
+
+```bash
+uv run python -m browser_use.llm.qwen38_27b start
+```
+
+```python
+from browser_use import Agent
+from browser_use.llm.qwen38_27b import chat_qwen38_27b
+
+llm = chat_qwen38_27b()  # qwen3.8:27b (MTP Q4_K_M). thinking off for structured actions
+```
+
+Any other Ollama tag still works via `ChatOllama`:
+
 ```python
 from browser_use import Agent, ChatOllama
 
-llm = ChatOllama(model="llama3", num_ctx=32000)
+llm = ChatOllama(model="llama3", ollama_options={"num_ctx": 32000})
 ```
 
 [Available models](https://ollama.com/library). Requires `ollama serve` running locally. Use `num_ctx` for context window (default may be too small).
