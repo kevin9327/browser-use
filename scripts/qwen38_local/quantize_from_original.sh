@@ -140,7 +140,14 @@ convert_all() {
 		log "ERROR: no BF16 GGUF after convert + fallback"
 		return 1
 	fi
-	# --mmproj / --mtp prefix the outfile; pass the unprefixed name.
+	local bf16_gb
+	bf16_gb="$(du -BG "$outfile" | awk '{print $1}' | tr -dc '0-9')"
+	if (( bf16_gb < 40 )); then
+		log "ERROR: $outfile is only ${bf16_gb}G (expected ~54G). Refusing to quantize a truncated/MTP file."
+		return 1
+	fi
+	# llama.cpp only auto-prefixes mmproj-/mtp- when --outfile is a DIRECTORY.
+	# Always pass the final filename so a second convert cannot clobber the backbone.
 	if [[ ! -f "$GGUF_DIR/mmproj-Qwen3.8-27B-F16.gguf" && ! -f "$GGUF_DIR/mmproj-Qwen3.8-27B-f16.gguf" ]]; then
 		need_disk 2 || true
 		log "convert mmproj"
@@ -148,7 +155,7 @@ convert_all() {
 			--outtype f16 \
 			--mmproj \
 			--use-temp-file \
-			--outfile "$GGUF_DIR/Qwen3.8-27B-F16.gguf" || log "mmproj convert failed"
+			--outfile "$GGUF_DIR/mmproj-Qwen3.8-27B-F16.gguf" || log "mmproj convert failed"
 	fi
 	if [[ ! -f "$GGUF_DIR/mtp-Qwen3.8-27B-BF16.gguf" && ! -f "$GGUF_DIR/mtp-Qwen3.8-27B-bf16.gguf" ]]; then
 		need_disk 8 || true
@@ -157,13 +164,20 @@ convert_all() {
 			--outtype bf16 \
 			--mtp \
 			--use-temp-file \
-			--outfile "$GGUF_DIR/Qwen3.8-27B-BF16.gguf" || log "mtp convert failed"
+			--outfile "$GGUF_DIR/mtp-Qwen3.8-27B-BF16.gguf" || log "mtp convert failed"
 	fi
 }
 
 maybe_delete_hf() {
-	if [[ -f "$GGUF_DIR/Qwen3.8-27B-BF16.gguf" ]]; then
-		log "BF16 GGUF ready; removing HF snapshot to free disk"
+	local bf16="$GGUF_DIR/Qwen3.8-27B-BF16.gguf"
+	if [[ -f "$bf16" ]]; then
+		local gb
+		gb="$(du -BG "$bf16" | awk '{print $1}' | tr -dc '0-9')"
+		if (( gb < 40 )); then
+			log "refusing to delete HF snapshot; $bf16 is only ${gb}G"
+			return 1
+		fi
+		log "BF16 GGUF ready (${gb}G); removing HF snapshot to free disk"
 		rm -rf "$HF_DIR"
 		mkdir -p "$HF_DIR"
 	fi
