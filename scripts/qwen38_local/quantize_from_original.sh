@@ -84,19 +84,22 @@ ensure_llama_cpp() {
 		cmake --build "$SRC_DIR/build" -j"$NPROC_COUNT" \
 			--target llama-quantize llama-imatrix llama-server llama-cli llama-gguf-split
 	fi
-	# Converter deps: CPU torch + local gguf package from this llama.cpp tree.
+	# Converter deps pin an older huggingface_hub; install them first so a
+	# background download cannot race a wheel uninstall.
 	uv pip install -r "$SRC_DIR/requirements/requirements-convert_hf_to_gguf.txt"
 	uv pip install -e "$SRC_DIR/gguf-py"
+	uv pip install -U hf_xet
 }
 
 download_original() {
 	log "download original ${HF_REPO} -> ${HF_DIR}"
-	hf download "$HF_REPO" --local-dir "$HF_DIR"
 	python - <<PY
-from huggingface_hub import HfApi
+from huggingface_hub import HfApi, snapshot_download
 from pathlib import Path
-api = HfApi()
-info = api.repo_info("$HF_REPO")
+repo = "$HF_REPO"
+dest = "$HF_DIR"
+snapshot_download(repo_id=repo, local_dir=dest)
+info = HfApi().repo_info(repo)
 text = f"repo={info.id}\nsha={info.sha}\nlast_modified={info.last_modified}\n"
 Path("$LOG_DIR/revision.txt").write_text(text, encoding="utf-8")
 print(text, end="")
@@ -125,7 +128,10 @@ convert_all() {
 	if [[ ! -f "$outfile" ]]; then
 		log "local BF16 convert failed; fetching lossless BF16 GGUF converted from the same original"
 		mkdir -p "$WORK_DIR/bf16_fallback"
-		hf download unsloth/Qwen3.8-27B-GGUF --include "BF16/*" --local-dir "$WORK_DIR/bf16_fallback"
+		python - <<PY
+from huggingface_hub import snapshot_download
+snapshot_download(repo_id="unsloth/Qwen3.8-27B-GGUF", local_dir="$WORK_DIR/bf16_fallback", allow_patterns=["BF16/*"])
+PY
 		shopt -s nullglob
 		local splits=("$WORK_DIR"/bf16_fallback/BF16/*.gguf)
 		if (( ${#splits[@]} == 1 )); then
@@ -361,12 +367,8 @@ EOF
 main() {
 	log "work_dir=$WORK_DIR free=$(free_gb)G"
 	ensure_venv
-	log "start original download in background"
-	download_original &
-	local dl_pid=$!
 	ensure_llama_cpp
-	log "wait for original download pid=$dl_pid"
-	wait "$dl_pid"
+	download_original
 	convert_all
 	maybe_delete_hf
 	quantize_k
