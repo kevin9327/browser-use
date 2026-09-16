@@ -1,29 +1,28 @@
 # Local models via Ollama: https://github.com/ollama/ollama
 #
-# Qwen3.8-27B (recommended): run once — picks one non-overlapping MTP quant by VRAM
+# Qwen3.8-27B setup (one non-overlapping MTP quant):
 #   ./bin/start-qwen38-local.sh setup
-#
-# Generic small model:
-#   ollama pull llama3.1:8b && ollama serve
+#   ./bin/start-qwen38-local.sh verify
 
 import os
 
 from browser_use import Agent, ChatOllama
 
-# Override tier: balanced | quality | max — see ./bin/start-qwen38-local.sh detect
 _tier_model = {
 	'balanced': 'qwen3.8:27b-mtp-q4_K_M',
 	'quality': 'qwen3.8:27b-mtp-q8_0',
 	'max': 'qwen3.8:27b-mtp-bf16',
 }
-_model = _tier_model.get(os.getenv('QWEN38_TIER', 'balanced'), _tier_model['balanced'])
+_tier = os.getenv('QWEN38_TIER', 'balanced')
+_model = _tier_model.get(_tier, _tier_model['balanced'])
+_num_ctx = int(os.getenv('QWEN38_NUM_CTX', '4096'))
 
 llm = ChatOllama(
 	model=_model,
 	ollama_options={
-		'num_ctx': 8192,
+		'num_ctx': _num_ctx,
 		'temperature': 0.1,
-		'think': False,  # agent tasks: disable thinking for lower latency
+		'think': False,
 	},
 )
 

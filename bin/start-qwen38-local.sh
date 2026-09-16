@@ -5,26 +5,26 @@
 # MTP variants supersede plain quants (same backbone + draft head = faster inference).
 #
 # Usage:
-#   ./bin/start-qwen38-local.sh detect          # print recommended tier + model
-#   ./bin/start-qwen38-local.sh pull [tier]     # pull one tier (default: auto)
+#   ./bin/start-qwen38-local.sh detect          # tier + num_ctx recommendation
+#   ./bin/start-qwen38-local.sh setup [tier]    # serve + pull + prune
+#   ./bin/start-qwen38-local.sh verify [tier]   # health + optional inference smoke test
+#   ./bin/start-qwen38-local.sh status          # one-line readiness summary
 #   ./bin/start-qwen38-local.sh serve           # start ollama with perf env
+#   ./bin/start-qwen38-local.sh pull [tier]     # pull one tier (default: auto)
 #   ./bin/start-qwen38-local.sh prune           # remove superseded / duplicate tags
-#   ./bin/start-qwen38-local.sh setup           # serve + pull recommended tier
 
 set -o errexit
 set -o nounset
 set -o pipefail
 
-# --- tiers (newest/highest tier wins when pruning) ---
-TIER_BALANCED='balanced'   # 24 GB GPU — best speed/quality tradeoff
-TIER_QUALITY='quality'     # 32 GB+ GPU
-TIER_MAX='max'             # 48 GB+ VRAM
+TIER_BALANCED='balanced'
+TIER_QUALITY='quality'
+TIER_MAX='max'
 
 MODEL_BALANCED='qwen3.8:27b-mtp-q4_K_M'
 MODEL_QUALITY='qwen3.8:27b-mtp-q8_0'
 MODEL_MAX='qwen3.8:27b-mtp-bf16'
 
-# Plain tags superseded by MTP (never pull these when MTP exists).
 SUPERSEDED_MODELS=(
 	'qwen3.8:27b'
 	'qwen3.8:27b-q4_K_M'
@@ -32,11 +32,18 @@ SUPERSEDED_MODELS=(
 	'qwen3.8:27b-bf16'
 )
 
+# Minimum memory (GB) to run inference for each tier (weights + KV headroom).
+TIER_MIN_INFER_GB_BALANCED=20
+TIER_MIN_INFER_GB_QUALITY=32
+TIER_MIN_INFER_GB_MAX=50
+
+# Minimum memory (GB) to recommend pulling each tier.
 TIER_VRAM_GB_BALANCED=20
 TIER_VRAM_GB_QUALITY=30
 TIER_VRAM_GB_MAX=46
 
 OLLAMA_HOST="${OLLAMA_HOST:-127.0.0.1:11434}"
+OLLAMA_URL="http://${OLLAMA_HOST}"
 
 _log() { printf '[qwen38] %s\n' "$*" >&2; }
 
@@ -58,7 +65,16 @@ _detect_vram_gb() {
 		nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | awk '{printf "%.0f\n", $1/1024}'
 		return
 	fi
-	awk '/MemTotal/ {printf "%.0f\n", $2/1024/1024}' /proc/meminfo
+	awk '/MemAvailable/ {printf "%.0f\n", $2/1024/1024; exit}' /proc/meminfo
+}
+
+_min_infer_gb_for_tier() {
+	case "$1" in
+		"${TIER_BALANCED}") echo "${TIER_MIN_INFER_GB_BALANCED}" ;;
+		"${TIER_QUALITY}") echo "${TIER_MIN_INFER_GB_QUALITY}" ;;
+		"${TIER_MAX}") echo "${TIER_MIN_INFER_GB_MAX}" ;;
+		*) return 1 ;;
+	esac
 }
 
 _recommend_tier() {
@@ -72,8 +88,33 @@ _recommend_tier() {
 		echo "${TIER_BALANCED}"
 	else
 		echo "${TIER_BALANCED}"
-		_log "WARN: detected ~${vram_gb}GB — 27B needs ~20GB+; expect CPU offload / slow runs."
+		_log "WARN: ~${vram_gb}GB available — 27B inference needs ~${TIER_MIN_INFER_GB_BALANCED}GB+ (pull OK, run on bigger GPU/RAM)."
 	fi
+}
+
+_recommend_num_ctx() {
+	local tier="$1"
+	local vram_gb="$(_detect_vram_gb)"
+	local min_gb
+	min_gb="$(_min_infer_gb_for_tier "${tier}")"
+
+	if [[ "${vram_gb}" -lt "${min_gb}" ]]; then
+		echo 2048
+	elif [[ "${tier}" == "${TIER_MAX}" && "${vram_gb}" -ge 64 ]]; then
+		echo 32768
+	elif [[ "${vram_gb}" -ge 32 ]]; then
+		echo 8192
+	else
+		echo 4096
+	fi
+}
+
+_can_run_inference() {
+	local tier="$1"
+	local vram_gb="$(_detect_vram_gb)"
+	local min_gb
+	min_gb="$(_min_infer_gb_for_tier "${tier}")"
+	[[ "${vram_gb}" -ge "${min_gb}" ]]
 }
 
 _ensure_ollama() {
@@ -84,30 +125,34 @@ _ensure_ollama() {
 }
 
 _apply_perf_env() {
-	# Single-stream agent workloads: one parallel slot, flash attention, modest KV cache.
 	export OLLAMA_FLASH_ATTENTION="${OLLAMA_FLASH_ATTENTION:-1}"
 	export OLLAMA_NUM_PARALLEL="${OLLAMA_NUM_PARALLEL:-1}"
 	export OLLAMA_MAX_LOADED_MODELS="${OLLAMA_MAX_LOADED_MODELS:-1}"
 	export OLLAMA_KEEP_ALIVE="${OLLAMA_KEEP_ALIVE:-30m}"
 }
 
-_start_serve() {
-	_apply_perf_env
-	if curl -fsS "http://${OLLAMA_HOST}/" >/dev/null 2>&1; then
-		_log "Ollama already running at http://${OLLAMA_HOST}"
-		return
-	fi
-	_log "Starting ollama serve (flash-attn=1, parallel=1)..."
-	nohup ollama serve >"${HOME}/.ollama/serve.log" 2>&1 &
-	for _ in $(seq 1 30); do
-		curl -fsS "http://${OLLAMA_HOST}/" >/dev/null 2>&1 && {
-			_log 'Ollama ready.'
-			return
-		}
+_wait_ollama() {
+	local attempts="${1:-30}"
+	for _ in $(seq 1 "${attempts}"); do
+		curl -fsS "${OLLAMA_URL}/" >/dev/null 2>&1 && return 0
 		sleep 1
 	done
-	_log 'Timed out waiting for Ollama.'
-	exit 1
+	return 1
+}
+
+_start_serve() {
+	_apply_perf_env
+	if curl -fsS "${OLLAMA_URL}/" >/dev/null 2>&1; then
+		_log "Ollama already running at ${OLLAMA_URL}"
+		return
+	fi
+	_log 'Starting ollama serve (flash-attn=1, parallel=1)...'
+	nohup ollama serve >"${HOME}/.ollama/serve.log" 2>&1 &
+	if ! _wait_ollama 30; then
+		_log 'Timed out waiting for Ollama. See ~/.ollama/serve.log'
+		exit 1
+	fi
+	_log 'Ollama ready.'
 }
 
 _model_installed() {
@@ -154,30 +199,124 @@ _pull_tier() {
 			max) echo '56GB' ;;
 		esac
 	))"
-	ollama pull "${model}"
+	local attempt
+	for attempt in 1 2 3; do
+		if ollama pull "${model}"; then
+			break
+		fi
+		_log "Pull failed (attempt ${attempt}/3), retrying in 5s..."
+		sleep 5
+		[[ "${attempt}" -eq 3 ]] && exit 1
+	done
+
 	_prune_superseded
 	_prune_other_tiers "${model}"
 	_log "Ready. Only ${model} is kept — no overlapping quants."
 	ollama list
 }
 
+_smoke_inference() {
+	local model="$1"
+	local num_ctx="$2"
+	local payload
+	payload=$(printf '{"model":"%s","prompt":"Reply with exactly: OK","stream":false,"options":{"num_predict":4,"num_ctx":%s,"think":false}}' "${model}" "${num_ctx}")
+
+	local response http_code body
+	response=$(curl -sS -w '\n%{http_code}' --max-time 120 -X POST "${OLLAMA_URL}/api/generate" -d "${payload}" 2>&1) || {
+		_log "Inference request failed (timeout or connection error)."
+		return 1
+	}
+	http_code=$(printf '%s' "${response}" | tail -1)
+	body=$(printf '%s' "${response}" | sed '$d')
+
+	if [[ "${http_code}" != "200" ]]; then
+		_log "Inference HTTP ${http_code}: ${body}"
+		return 1
+	fi
+	if printf '%s' "${body}" | grep -q '"error"'; then
+		_log "Inference error: ${body}"
+		return 1
+	fi
+	_log 'Inference smoke test passed.'
+	return 0
+}
+
+_cmd_verify() {
+	local tier="${1:-$(_recommend_tier)}"
+	local model num_ctx
+	model="$(_model_for_tier "${tier}")"
+	num_ctx="$(_recommend_num_ctx "${tier}")"
+
+	_ensure_ollama
+	_start_serve
+
+	local ok=0
+	if curl -fsS "${OLLAMA_URL}/" >/dev/null 2>&1; then
+		_log "OK: Ollama reachable at ${OLLAMA_URL}"
+	else
+		_log 'FAIL: Ollama not reachable'
+		ok=1
+	fi
+
+	if _model_installed "${model}"; then
+		_log "OK: Model installed (${model})"
+	else
+		_log "FAIL: Model missing (${model}) — run: $0 pull ${tier}"
+		ok=1
+	fi
+
+	if [[ "${ok}" -ne 0 ]]; then
+		exit 1
+	fi
+
+	if _can_run_inference "${tier}"; then
+		_log "Running inference smoke test (num_ctx=${num_ctx})..."
+		if _smoke_inference "${model}" "${num_ctx}"; then
+			_log 'VERIFY: all checks passed (including inference).'
+			exit 0
+		fi
+		_log 'FAIL: inference smoke test failed (OOM? check dmesg / free -h)'
+		exit 1
+	fi
+
+	_log "SKIP: inference (~$(_detect_vram_gb)GB available, need ~$(_min_infer_gb_for_tier "${tier}")GB+)"
+	_log 'VERIFY: install OK; run inference on a machine with enough VRAM/RAM.'
+	exit 0
+}
+
 _cmd_detect() {
-	local tier model vram
+	local tier model vram num_ctx infer_ready
 	vram="$(_detect_vram_gb)"
 	tier="$(_recommend_tier)"
 	model="$(_model_for_tier "${tier}")"
+	num_ctx="$(_recommend_num_ctx "${tier}")"
+	if _can_run_inference "${tier}"; then infer_ready=true; else infer_ready=false; fi
 	cat <<EOF
 detected_vram_gb=${vram}
 recommended_tier=${tier}
 recommended_model=${model}
+recommended_num_ctx=${num_ctx}
+inference_ready=${infer_ready}
 browser_use_snippet:
   from browser_use import Agent, ChatOllama
   llm = ChatOllama(
       model='${model}',
-      ollama_options={'num_ctx': 8192, 'temperature': 0.1, 'think': False},
+      ollama_options={'num_ctx': ${num_ctx}, 'temperature': 0.1, 'think': False},
   )
   Agent('your task', llm=llm).run_sync()
 EOF
+}
+
+_cmd_status() {
+	local tier model
+	tier="$(_recommend_tier)"
+	model="$(_model_for_tier "${tier}")"
+	printf 'ollama=%s model=%s installed=%s inference_ready=%s num_ctx=%s\n' \
+		"$(curl -fsS "${OLLAMA_URL}/" >/dev/null 2>&1 && echo up || echo down)" \
+		"${model}" \
+		"$(_model_installed "${model}" && echo yes || echo no)" \
+		"$(_can_run_inference "${tier}" && echo yes || echo no)" \
+		"$(_recommend_num_ctx "${tier}")"
 }
 
 _mode="${1:-setup}"
@@ -187,6 +326,8 @@ case "${_mode}" in
 	detect) _cmd_detect ;;
 	serve) _ensure_ollama; _start_serve ;;
 	pull) _pull_tier "${1:-}" ;;
+	verify) _cmd_verify "${1:-}" ;;
+	status) _cmd_status ;;
 	prune)
 		_ensure_ollama
 		tier="$(_recommend_tier)"
@@ -202,7 +343,7 @@ case "${_mode}" in
 		_cmd_detect
 		;;
 	*)
-		echo "Usage: $0 {detect|serve|pull [tier]|prune|setup [tier]}"
+		echo "Usage: $0 {detect|setup [tier]|verify [tier]|status|serve|pull [tier]|prune}"
 		echo "Tiers: balanced (~24GB) | quality (~32GB) | max (~48GB+)"
 		exit 1
 		;;
