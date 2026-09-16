@@ -77,6 +77,21 @@ def test_status_script_one_line_format():
 	assert re.search(r'ollama=(up|down) host=\S+ model=\S+ installed=(yes|no)', result.stdout + result.stderr)
 
 
+def test_doctor_reports_completion_path():
+	result = subprocess.run(
+		[str(SETUP_SCRIPT), 'doctor'],
+		capture_output=True,
+		text=True,
+		cwd=REPO_ROOT,
+		timeout=30,
+		check=False,
+	)
+	combined = result.stdout + result.stderr
+	assert result.returncode == 0, combined
+	assert 'complete_when:' in combined
+	assert 'start-qwen38-local.sh e2e' in combined
+
+
 @pytest.mark.skipif(not _ollama_e2e_enabled(), reason='Set OLLAMA_E2E=1 for live Ollama chat test')
 @pytest.mark.skipif(_mem_available_gb() < 20, reason='Need ~20GB+ MemAvailable for 27B inference')
 @pytest.mark.skipif(not _ollama_reachable(), reason='Ollama not reachable at 127.0.0.1:11434')

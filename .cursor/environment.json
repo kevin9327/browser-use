@@ -1,6 +1,6 @@
 {
 	"name": "browser-use-qwen38-local",
-	"install": "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq zstd curl && curl -fsSL https://ollama.com/install.sh | sh",
+	"install": "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq zstd curl && curl -fsSL https://ollama.com/install.sh | sh && curl -LsSf https://astral.sh/uv/install.sh | sh && export PATH=\"$HOME/.local/bin:$PATH\" && uv sync && ./bin/start-qwen38-local.sh pull balanced",
 	"terminals": [
 		{
 			"name": "ollama",

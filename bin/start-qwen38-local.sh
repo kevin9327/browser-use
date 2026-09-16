@@ -354,7 +354,7 @@ _cmd_verify() {
 	_log "SKIP: inference (~$(_detect_vram_gb)GB available, need ~$(_min_infer_gb_for_tier "${tier}")GB+)"
 	_log 'Running install-level CI tests...'
 	if uv run pytest -q "$(_repo_root)/tests/ci/models/test_qwen38_local_setup.py" \
-		-k 'test_setup_script or test_tier_models or test_status_script'; then
+		-k 'test_setup_script or test_tier_models or test_status_script or test_doctor'; then
 		_log 'VERIFY: install OK + CI passed; run e2e on 20GB+ machine.'
 		return 0
 	fi
