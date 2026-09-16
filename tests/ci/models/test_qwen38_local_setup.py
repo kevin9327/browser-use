@@ -61,6 +61,7 @@ def test_verify_script_reports_install_health():
 	assert result.returncode == 0, combined
 	assert 'OK: Ollama reachable' in combined
 	assert 'OK: Model installed' in combined or 'FAIL: Model missing' in combined
+	assert 'VERIFY: install OK' in combined or 'VERIFY: all checks passed' in combined
 
 
 def test_status_script_one_line_format():

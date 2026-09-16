@@ -8,6 +8,7 @@
 #   ./bin/start-qwen38-local.sh detect          # tier + num_ctx recommendation
 #   ./bin/start-qwen38-local.sh setup [tier]    # serve + pull + prune
 #   ./bin/start-qwen38-local.sh verify [tier]   # health + optional inference smoke test
+#   ./bin/start-qwen38-local.sh e2e [tier]      # full pipeline + evidence report
 #   ./bin/start-qwen38-local.sh status          # one-line readiness summary
 #   ./bin/start-qwen38-local.sh serve           # start ollama with perf env
 #   ./bin/start-qwen38-local.sh pull [tier]     # pull one tier (default: auto)
@@ -48,6 +49,23 @@ OLLAMA_URL="http://${OLLAMA_HOST}"
 export PATH="${HOME}/.local/bin:${PATH}"
 
 _log() { printf '[qwen38] %s\n' "$*" >&2; }
+
+_repo_root() {
+	cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd
+}
+
+_check_recent_oom() {
+	dmesg 2>/dev/null | tail -200 | grep -q 'Killed process.*llama-server'
+}
+
+_restart_serve_if_dead() {
+	if curl -fsS "${OLLAMA_URL}/" >/dev/null 2>&1; then
+		return
+	fi
+	_log 'Ollama not responding — restarting serve...'
+	nohup ollama serve >"${HOME}/.ollama/serve.log" 2>&1 &
+	_wait_ollama 30 || exit 1
+}
 
 _model_for_tier() {
 	case "$1" in
@@ -237,6 +255,9 @@ _smoke_inference() {
 	fi
 	if printf '%s' "${body}" | grep -q '"error"'; then
 		_log "Inference error: ${body}"
+		if _check_recent_oom; then
+			_log 'Hint: recent OOM kill detected — need ~20GB+ RAM/VRAM for 27B balanced tier.'
+		fi
 		return 1
 	fi
 	_log 'Inference smoke test passed.'
@@ -250,6 +271,7 @@ _cmd_verify() {
 	num_ctx="$(_recommend_num_ctx "${tier}")"
 
 	_ensure_ollama
+	_restart_serve_if_dead
 	_start_serve
 
 	local ok=0
@@ -268,7 +290,7 @@ _cmd_verify() {
 	fi
 
 	if [[ "${ok}" -ne 0 ]]; then
-		exit 1
+		return 1
 	fi
 
 	if _can_run_inference "${tier}"; then
@@ -276,19 +298,68 @@ _cmd_verify() {
 		if _smoke_inference "${model}" "${num_ctx}"; then
 			_log 'Running ChatOllama Python smoke test...'
 			if QWEN38_TIER="${tier}" QWEN38_NUM_CTX="${num_ctx}" uv run python "${BASH_SOURCE%/*}/test-qwen38-chat.py"; then
-				_log 'VERIFY: all checks passed (curl + ChatOllama).'
-				exit 0
+				_log 'Running examples/models/ollama.py (OLLAMA_SMOKE=1)...'
+				if QWEN38_TIER="${tier}" QWEN38_NUM_CTX="${num_ctx}" OLLAMA_SMOKE=1 uv run python "$(_repo_root)/examples/models/ollama.py"; then
+					_log 'VERIFY: all checks passed (curl + ChatOllama + ollama.py smoke).'
+					return 0
+				fi
+				_log 'FAIL: ollama.py smoke failed'
+				return 1
 			fi
 			_log 'FAIL: ChatOllama smoke test failed'
-			exit 1
+			return 1
 		fi
 		_log 'FAIL: inference smoke test failed (OOM? check dmesg / free -h)'
-		exit 1
+		return 1
 	fi
 
 	_log "SKIP: inference (~$(_detect_vram_gb)GB available, need ~$(_min_infer_gb_for_tier "${tier}")GB+)"
-	_log 'VERIFY: install OK; run inference on a machine with enough VRAM/RAM.'
-	exit 0
+	_log 'Running install-level CI tests...'
+	if uv run pytest -q "$(_repo_root)/tests/ci/models/test_qwen38_local_setup.py" \
+		-k 'test_setup_script or test_tier_models or test_status_script'; then
+		_log 'VERIFY: install OK + CI passed; run e2e on 20GB+ machine.'
+		return 0
+	fi
+	_log 'FAIL: install-level CI tests failed'
+	return 1
+}
+
+_cmd_e2e() {
+	local tier="${1:-$(_recommend_tier)}"
+	local model num_ctx root report
+	model="$(_model_for_tier "${tier}")"
+	num_ctx="$(_recommend_num_ctx "${tier}")"
+	root="$(_repo_root)"
+	report="${QWEN38_E2E_REPORT:-/tmp/qwen38-e2e-report.txt}"
+
+	{
+		echo "=== Qwen3.8 E2E $(date -Is) tier=${tier} model=${model} ==="
+		_cmd_status
+		echo '--- verify ---'
+	} >"${report}"
+
+	if ! _cmd_verify "${tier}" >>"${report}" 2>&1; then
+		_log "E2E FAILED at verify. Report: ${report}"
+		exit 1
+	fi
+
+	if ! _can_run_inference "${tier}"; then
+		_log "E2E partial: inference skipped (need ~$(_min_infer_gb_for_tier "${tier}")GB+). Report: ${report}"
+		exit 2
+	fi
+
+	_log 'Running agent button-click e2e (pytest)...'
+	{
+		echo '--- agent e2e ---'
+		OLLAMA_E2E=1 QWEN38_TIER="${tier}" QWEN38_NUM_CTX="${num_ctx}" \
+			uv run pytest -vxs "${root}/tests/ci/models/test_qwen38_local_setup.py::test_agent_button_click_with_qwen38"
+	} >>"${report}" 2>&1 || {
+		_log "E2E FAILED at agent test. Report: ${report}"
+		exit 1
+	}
+
+	_log "E2E COMPLETE. Report: ${report}"
+	cat "${report}" >&2
 }
 
 _cmd_detect() {
@@ -333,7 +404,8 @@ case "${_mode}" in
 	detect) _cmd_detect ;;
 	serve) _ensure_ollama; _start_serve ;;
 	pull) _pull_tier "${1:-}" ;;
-	verify) _cmd_verify "${1:-}" ;;
+	verify) _cmd_verify "${1:-}" || exit $? ;;
+	e2e) _cmd_e2e "${1:-}" ;;
 	status) _cmd_status ;;
 	prune)
 		_ensure_ollama
@@ -350,7 +422,7 @@ case "${_mode}" in
 		_cmd_detect
 		;;
 	*)
-		echo "Usage: $0 {detect|setup [tier]|verify [tier]|status|serve|pull [tier]|prune}"
+		echo "Usage: $0 {detect|setup [tier]|verify [tier]|e2e [tier]|status|serve|pull [tier]|prune}"
 		echo "Tiers: balanced (~24GB) | quality (~32GB) | max (~48GB+)"
 		exit 1
 		;;
