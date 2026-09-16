@@ -34,6 +34,17 @@ _log() {
 }
 
 _ensure_ollama_installed() {
+	if ! command -v zstd >/dev/null 2>&1; then
+		_log "zstd is required to install Ollama (Debian/Ubuntu: sudo apt-get install -y zstd)"
+		if command -v apt-get >/dev/null 2>&1; then
+			sudo apt-get update -qq
+			sudo apt-get install -y -qq zstd
+		else
+			echo "ERROR: install zstd, then re-run this script" >&2
+			exit 1
+		fi
+	fi
+
 	if command -v ollama >/dev/null 2>&1; then
 		_log "Ollama already installed: $(ollama --version 2>/dev/null || ollama -v)"
 		return
@@ -84,25 +95,25 @@ _pull_all_tags() {
 }
 
 _print_usage() {
-	cat <<EOF
+	cat <<'EOF'
 
 Done. Recommended defaults by VRAM:
-  32GB+ GPU : ${MODEL_REPO}:q4-km-32gbGPU
-  tight VRAM: ${MODEL_REPO}:iq4-xs-64k-text-q4kv
+  32GB+ GPU : oamazonasgabriel/qwen3.8-27b:q4-km-32gbGPU
+  tight VRAM: oamazonasgabriel/qwen3.8-27b:iq4-xs-64k-text-q4kv
 
 Browser-use example:
 
   from browser_use import Agent, ChatOllama
 
   llm = ChatOllama(
-      model="${MODEL_REPO}:q4-km-32gbGPU",
+      model="oamazonasgabriel/qwen3.8-27b:q4-km-32gbGPU",
       ollama_options={"num_ctx": 65536},
   )
   Agent("your task", llm=llm).run_sync()
 
-Ollama API: $OLLAMA_HOST
-Logs:       $REPO_ROOT/.ollama-serve.log
 EOF
+	printf 'Ollama API: %s\n' "$OLLAMA_HOST"
+	printf 'Logs:       %s\n' "$REPO_ROOT/.ollama-serve.log"
 }
 
 cmd="${1:-all}"
