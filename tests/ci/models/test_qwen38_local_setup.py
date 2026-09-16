@@ -60,7 +60,7 @@ def test_verify_script_reports_install_health():
 	combined = result.stdout + result.stderr
 	assert result.returncode == 0, combined
 	assert 'OK: Ollama reachable' in combined
-	assert 'OK: Model installed' in combined or 'FAIL: Model missing' in combined
+	assert 'OK: Model available' in combined or 'OK: Model installed' in combined or 'FAIL: Model missing' in combined
 	assert 'VERIFY: install OK' in combined or 'VERIFY: all checks passed' in combined
 
 
@@ -74,7 +74,7 @@ def test_status_script_one_line_format():
 		check=False,
 	)
 	assert result.returncode == 0, result.stderr
-	assert re.search(r'ollama=(up|down) model=\S+ installed=(yes|no)', result.stdout + result.stderr)
+	assert re.search(r'ollama=(up|down) host=\S+ model=\S+ installed=(yes|no)', result.stdout + result.stderr)
 
 
 @pytest.mark.skipif(not _ollama_e2e_enabled(), reason='Set OLLAMA_E2E=1 for live Ollama chat test')

@@ -9,7 +9,7 @@
 #   ./bin/start-qwen38-local.sh setup [tier]    # serve + pull + prune
 #   ./bin/start-qwen38-local.sh verify [tier]   # health + optional inference smoke test
 #   ./bin/start-qwen38-local.sh e2e [tier]      # full pipeline + evidence report
-#   ./bin/start-qwen38-local.sh status          # one-line readiness summary
+#   ./bin/start-qwen38-local.sh doctor           # diagnose blockers + next steps
 #   ./bin/start-qwen38-local.sh serve           # start ollama with perf env
 #   ./bin/start-qwen38-local.sh pull [tier]     # pull one tier (default: auto)
 #   ./bin/start-qwen38-local.sh prune           # remove superseded / duplicate tags
@@ -59,6 +59,9 @@ _check_recent_oom() {
 }
 
 _restart_serve_if_dead() {
+	if _using_remote_ollama; then
+		return
+	fi
 	if curl -fsS "${OLLAMA_URL}/" >/dev/null 2>&1; then
 		return
 	fi
@@ -129,8 +132,32 @@ _recommend_num_ctx() {
 	fi
 }
 
+_using_remote_ollama() {
+	case "${OLLAMA_HOST}" in
+		127.0.0.1:* | localhost:*) return 1 ;;
+		*) return 0 ;;
+	esac
+}
+
+_model_available() {
+	local model="$1"
+	if _using_remote_ollama; then
+		curl -fsS "${OLLAMA_URL}/api/tags" 2>/dev/null | grep -Fq "\"name\":\"${model}\"" && return 0
+		curl -fsS "${OLLAMA_URL}/api/tags" 2>/dev/null | grep -Fq "\"name\": \"${model}\"" && return 0
+		return 1
+	fi
+	_model_installed "${model}"
+}
+
 _can_run_inference() {
 	local tier="$1"
+	if _using_remote_ollama; then
+		curl -fsS "${OLLAMA_URL}/" >/dev/null 2>&1
+		return
+	fi
+	if [[ "${QWEN38_FORCE_INFER:-}" == "1" ]]; then
+		return 0
+	fi
 	local vram_gb="$(_detect_vram_gb)"
 	local min_gb
 	min_gb="$(_min_infer_gb_for_tier "${tier}")"
@@ -138,6 +165,9 @@ _can_run_inference() {
 }
 
 _ensure_ollama() {
+	if _using_remote_ollama; then
+		return
+	fi
 	command -v ollama >/dev/null 2>&1 || {
 		_log 'Install Ollama: https://ollama.com/download'
 		exit 1
@@ -165,6 +195,10 @@ _start_serve() {
 	if curl -fsS "${OLLAMA_URL}/" >/dev/null 2>&1; then
 		_log "Ollama already running at ${OLLAMA_URL}"
 		return
+	fi
+	if _using_remote_ollama; then
+		_log "Remote Ollama unreachable at ${OLLAMA_URL}"
+		exit 1
 	fi
 	_log 'Starting ollama serve (flash-attn=1, parallel=1)...'
 	nohup ollama serve >"${HOME}/.ollama/serve.log" 2>&1 &
@@ -271,8 +305,12 @@ _cmd_verify() {
 	num_ctx="$(_recommend_num_ctx "${tier}")"
 
 	_ensure_ollama
-	_restart_serve_if_dead
-	_start_serve
+	if _using_remote_ollama; then
+		:
+	else
+		_restart_serve_if_dead
+		_start_serve
+	fi
 
 	local ok=0
 	if curl -fsS "${OLLAMA_URL}/" >/dev/null 2>&1; then
@@ -282,8 +320,8 @@ _cmd_verify() {
 		ok=1
 	fi
 
-	if _model_installed "${model}"; then
-		_log "OK: Model installed (${model})"
+	if _model_available "${model}"; then
+		_log "OK: Model available (${model})"
 	else
 		_log "FAIL: Model missing (${model}) — run: $0 pull ${tier}"
 		ok=1
@@ -397,12 +435,42 @@ _cmd_status() {
 	local tier model
 	tier="$(_recommend_tier)"
 	model="$(_model_for_tier "${tier}")"
-	printf 'ollama=%s model=%s installed=%s inference_ready=%s num_ctx=%s\n' \
+	printf 'ollama=%s host=%s model=%s installed=%s inference_ready=%s num_ctx=%s\n' \
 		"$(curl -fsS "${OLLAMA_URL}/" >/dev/null 2>&1 && echo up || echo down)" \
+		"${OLLAMA_HOST}" \
 		"${model}" \
-		"$(_model_installed "${model}" && echo yes || echo no)" \
+		"$(_model_available "${model}" && echo yes || echo no)" \
 		"$(_can_run_inference "${tier}" && echo yes || echo no)" \
 		"$(_recommend_num_ctx "${tier}")"
+}
+
+_cmd_doctor() {
+	local tier model
+	tier="$(_recommend_tier)"
+	model="$(_model_for_tier "${tier}")"
+	cat <<EOF
+qwen38_doctor:
+  ollama_host: ${OLLAMA_HOST}
+  remote_ollama: $(_using_remote_ollama && echo true || echo false)
+  local_mem_available_gb: $(_detect_vram_gb)
+  recommended_tier: ${tier}
+  recommended_model: ${model}
+  model_available: $(_model_available "${model}" && echo yes || echo no)
+  inference_ready: $(_can_run_inference "${tier}" && echo yes || echo no)
+  blockers:
+EOF
+	if ! curl -fsS "${OLLAMA_URL}/" >/dev/null 2>&1; then
+		echo "    - Ollama not reachable at ${OLLAMA_URL}"
+	fi
+	if ! _model_available "${model}"; then
+		echo "    - Model ${model} not installed (run: $0 pull ${tier})"
+	fi
+	if ! _can_run_inference "${tier}"; then
+		echo "    - Local RAM ~$(_detect_vram_gb)GB < ~$(_min_infer_gb_for_tier "${tier}")GB for 27B inference"
+		echo "    - Fix: use 24GB+ GPU machine OR export OLLAMA_HOST=your-gpu-pc:11434"
+	fi
+	echo "  complete_when:"
+	echo "    ./bin/start-qwen38-local.sh e2e   # exit 0"
 }
 
 _mode="${1:-setup}"
@@ -414,6 +482,7 @@ case "${_mode}" in
 	pull) _pull_tier "${1:-}" ;;
 	verify) _cmd_verify "${1:-}" || exit $? ;;
 	e2e) _cmd_e2e "${1:-}" ;;
+	doctor) _cmd_doctor ;;
 	status) _cmd_status ;;
 	prune)
 		_ensure_ollama
@@ -430,7 +499,7 @@ case "${_mode}" in
 		_cmd_detect
 		;;
 	*)
-		echo "Usage: $0 {detect|setup [tier]|verify [tier]|e2e [tier]|status|serve|pull [tier]|prune}"
+		echo "Usage: $0 {detect|setup [tier]|verify [tier]|e2e [tier]|doctor|status|serve|pull [tier]|prune}"
 		echo "Tiers: balanced (~24GB) | quality (~32GB) | max (~48GB+)"
 		exit 1
 		;;
