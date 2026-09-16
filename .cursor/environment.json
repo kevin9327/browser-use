@@ -1,0 +1,10 @@
+{
+	"name": "browser-use-qwen38-local",
+	"install": "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq zstd curl && curl -fsSL https://ollama.com/install.sh | sh",
+	"terminals": [
+		{
+			"name": "ollama",
+			"command": "ollama serve"
+		}
+	]
+}

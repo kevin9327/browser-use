@@ -27,6 +27,8 @@ dist/
 *.csv
 *.json
 !/server.json
+!docs/docs.json
+!.cursor/environment.json
 *.jsonl
 *.log
 *.bak

@@ -348,13 +348,21 @@ _cmd_e2e() {
 		exit 2
 	fi
 
-	_log 'Running agent button-click e2e (pytest)...'
+	_log 'Running agent button-click e2e...'
 	{
 		echo '--- agent e2e ---'
-		OLLAMA_E2E=1 QWEN38_TIER="${tier}" QWEN38_NUM_CTX="${num_ctx}" \
-			uv run pytest -vxs "${root}/tests/ci/models/test_qwen38_local_setup.py::test_agent_button_click_with_qwen38"
+		QWEN38_TIER="${tier}" QWEN38_NUM_CTX="${num_ctx}" uv run python "${root}/bin/test-qwen38-agent.py"
 	} >>"${report}" 2>&1 || {
 		_log "E2E FAILED at agent test. Report: ${report}"
+		exit 1
+	}
+
+	_log 'Running full examples/models/ollama.py (requires browser + LLM)...'
+	{
+		echo '--- ollama.py full agent ---'
+		QWEN38_TIER="${tier}" QWEN38_NUM_CTX="${num_ctx}" uv run python "${root}/examples/models/ollama.py"
+	} >>"${report}" 2>&1 || {
+		_log "E2E FAILED at ollama.py. Report: ${report}"
 		exit 1
 	}
 
