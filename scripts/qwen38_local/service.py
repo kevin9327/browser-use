@@ -16,6 +16,7 @@ from pathlib import Path
 from urllib.request import urlretrieve
 
 from .catalog import (
+	COVERAGE_KEYS,
 	DEFAULT_PINNED_KEYS,
 	LLAMA_CPP_RELEASE,
 	LLAMA_QUANT_TYPES,
@@ -113,7 +114,12 @@ def build_start_plan(
 		skipped = [target for target in wanted if target.key not in {item.key for item in download}]
 		notes.append('force_all=True: disk/RAM filters disabled. This can fill the disk or OOM.')
 	else:
-		download, skipped = fit_by_bytes(wanted, hardware.disk_free_bytes, pinned_keys=DEFAULT_PINNED_KEYS)
+		download, skipped = fit_by_bytes(
+			wanted,
+			hardware.disk_free_bytes,
+			pinned_keys=DEFAULT_PINNED_KEYS,
+			priority_keys=COVERAGE_KEYS,
+		)
 
 	serve_ggufs = [
 		target.filename
@@ -316,7 +322,7 @@ def convert_and_quantize(
 
 	for quant_type in quant_types:
 		assert quant_type in LLAMA_QUANT_TYPES
-		out = gguf_dir / f'Qwen3.8-27B-{quant_type}.gguf'
+		out = gguf_dir / f'Qwen3.8-27B-self-{quant_type}.gguf'
 		outputs.append(out)
 		print(f'[qwen38] quantize  {quant_type} -> {out.name}')
 		if dry_run or out.exists():

@@ -23,9 +23,6 @@ def _build_parser() -> argparse.ArgumentParser:
 		prog='python -m scripts.qwen38_local',
 		description='Fetch Qwen/Qwen3.8-27B and start every local quantized variant that fits this machine.',
 	)
-	parser.add_argument(
-		'--models-dir', type=Path, default=None, help='Override QWEN38_MODELS_DIR / ~/.cache/browser-use/qwen3.8-27b'
-	)
 	sub = parser.add_subparsers(dest='command', required=True)
 
 	sub.add_parser('list', help='Print the original + Unsloth + Ollama + self-quant catalog')
@@ -41,6 +38,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _add_start_flags(parser: argparse.ArgumentParser) -> None:
+	parser.add_argument(
+		'--models-dir', type=Path, default=None, help='Override QWEN38_MODELS_DIR / ~/.cache/browser-use/qwen3.8-27b'
+	)
 	parser.add_argument('--all', action='store_true', default=True, help='Include every quantized variant that fits')
 	parser.add_argument('--backend', choices=('llama', 'ollama', 'both'), default='both')
 	parser.add_argument('--force-all', action='store_true', help='Ignore disk/RAM filters and try every artifact')
@@ -52,7 +52,7 @@ def _add_start_flags(parser: argparse.ArgumentParser) -> None:
 def main(argv: list[str] | None = None) -> int:
 	parser = _build_parser()
 	args = parser.parse_args(argv)
-	models_dir = (args.models_dir or default_models_dir()).expanduser()
+	models_dir = (getattr(args, 'models_dir', None) or default_models_dir()).expanduser()
 
 	if args.command == 'list':
 		list_catalog()

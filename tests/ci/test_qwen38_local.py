@@ -7,12 +7,12 @@ the catalog invariants and the disk/RAM planner that `start --all` uses.
 from pathlib import Path
 
 from scripts.qwen38_local.catalog import (
+	COVERAGE_KEYS,
 	DEFAULT_PINNED_KEYS,
 	LLAMA_QUANT_TYPES,
 	OFFICIAL_REPO,
 	OLLAMA_TAGS,
 	ORIGINAL_SAFETENSOR_BYTES,
-	UNSLOTH_GGUFS,
 	UNSLOTH_REPO,
 	all_download_targets,
 	default_serve_quant,
@@ -77,15 +77,16 @@ def test_mlx_ollama_tags_are_not_linux_ok():
 
 
 def test_fit_by_bytes_pins_original_and_default_quant():
-	pinned = ('original', 'ud-q4-k-xl', 'mmproj-bf16')
+	pinned = ('ud-q4-k-xl', 'mmproj-bf16', 'original')
 	assert DEFAULT_PINNED_KEYS == pinned
-	# 80GB free after the 8GB reserve -> 72GB usable. That holds original (55.6)
-	# + Q4_K_XL (17.6) + mmproj (0.93) and must not spend the rest on a second BF16
-	# before smaller quants.
+	# 90GB free after the 8GB reserve -> 82GB usable. That holds Q4_K_XL (17.6)
+	# + mmproj (0.93) + original (55.6) and must not spend leftover on a second
+	# BF16 copy before smaller quants.
 	chosen, skipped = fit_by_bytes(
 		all_download_targets(include_self_quant=False, linux_only=True),
-		budget_bytes=80_000_000_000,
+		budget_bytes=90_000_000_000,
 		pinned_keys=DEFAULT_PINNED_KEYS,
+		priority_keys=COVERAGE_KEYS,
 	)
 	keys = {target.key for target in chosen}
 	assert 'original' in keys
@@ -95,18 +96,35 @@ def test_fit_by_bytes_pins_original_and_default_quant():
 	assert skipped
 
 
-def test_fit_by_bytes_fills_quant_ladder_smallest_first_after_pins():
-	# ~90GB usable after reserve: original + default Q4 + mmproj + several small GGUFs.
+def test_fit_by_bytes_prefers_default_quant_over_original_when_disk_is_tight():
 	chosen, skipped = fit_by_bytes(
-		list(UNSLOTH_GGUFS) + list(all_download_targets(include_self_quant=False, linux_only=True)),
-		budget_bytes=100_000_000_000,
+		all_download_targets(include_self_quant=False, linux_only=True),
+		budget_bytes=80_000_000_000,
 		pinned_keys=DEFAULT_PINNED_KEYS,
 	)
 	keys = {target.key for target in chosen}
-	assert 'ud-iq1-s' in keys
+	assert 'ud-q4-k-xl' in keys
+	assert 'mmproj-bf16' in keys
+	assert 'original' not in keys
+	assert any(target.key == 'original' for target in skipped)
+
+
+def test_fit_by_bytes_fills_quant_ladder_smallest_first_after_pins():
+	# 220GB usable after reserve: original + default Q4 + the coverage ladder
+	# (Q5/Q6/Q8) must land before leftover duplicate Q4_0/Q4_1 files.
+	chosen, skipped = fit_by_bytes(
+		all_download_targets(include_self_quant=False, linux_only=True),
+		budget_bytes=230_000_000_000,
+		pinned_keys=DEFAULT_PINNED_KEYS,
+		priority_keys=COVERAGE_KEYS,
+	)
+	keys = {target.key for target in chosen}
 	assert 'original' in keys
 	assert 'ud-q4-k-xl' in keys
-	assert any(target.key.startswith('ud-') for target in skipped) or any(target.kind == 'ollama' for target in skipped)
+	assert 'ud-q5-k-xl' in keys
+	assert 'ud-q6-k-xl' in keys
+	assert 'q8-0' in keys
+	assert skipped
 
 
 def test_default_serve_quant_tracks_ram():

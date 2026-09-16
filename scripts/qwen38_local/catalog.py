@@ -476,7 +476,7 @@ def self_quant_targets() -> tuple[DownloadTarget, ...]:
 				kind='self-quant',
 				label=f'Self-quant {quant_type}',
 				size_bytes=SELF_QUANT_SIZE_ESTIMATES[quant_type],
-				filename=f'Qwen3.8-27B-{quant_type}.gguf',
+				filename=f'Qwen3.8-27B-self-{quant_type}.gguf',
 				quant_type=quant_type,
 				quality_rank={'Q8_0': 93, 'Q6_K': 80, 'Q5_K_M': 68, 'Q4_K_M': 55}.get(quant_type, 40),
 				notes='llama-quantize from official BF16 GGUF (no imatrix).',
@@ -500,12 +500,13 @@ def fit_by_bytes(
 	*,
 	reserve_bytes: int = 8_000_000_000,
 	pinned_keys: tuple[str, ...] = (),
+	priority_keys: tuple[str, ...] = (),
 ) -> tuple[list[DownloadTarget], list[DownloadTarget]]:
 	"""Pack as many artifacts as possible under a disk budget.
 
-	Pinned keys are reserved first (official weights + the default local quant).
-	Everything else is packed smallest-first so `start --all` keeps the widest
-	quant ladder instead of letting a second BF16 copy eat the disk.
+	Pinned keys are reserved first (default local quant, projector, official weights).
+	Priority keys then cover the rest of the bit-width ladder (Q5/Q6/Q8, 16GB IQ3, …)
+	before leftover disk is filled smallest-first.
 	"""
 	assert budget_bytes >= 0
 	usable = max(0, budget_bytes - reserve_bytes)
@@ -527,8 +528,11 @@ def fit_by_bytes(
 	for key in pinned_keys:
 		if key in by_key:
 			_try_add(by_key[key])
+	for key in priority_keys:
+		if key in by_key:
+			_try_add(by_key[key])
 
-	rest = [target for target in targets if target.key not in set(pinned_keys)]
+	rest = [target for target in targets if target.key not in set(pinned_keys) | set(priority_keys)]
 	for target in sorted(rest, key=lambda item: (item.size_bytes, item.key)):
 		_try_add(target)
 
@@ -537,7 +541,23 @@ def fit_by_bytes(
 	return chosen, skipped
 
 
-DEFAULT_PINNED_KEYS: tuple[str, ...] = ('original', 'ud-q4-k-xl', 'mmproj-bf16')
+DEFAULT_PINNED_KEYS: tuple[str, ...] = ('ud-q4-k-xl', 'mmproj-bf16', 'original')
+# After the 24GB default, cover the rest of the bit-width ladder before filling
+# leftover disk with duplicate Q4_0/Q4_1 clones.
+COVERAGE_KEYS: tuple[str, ...] = (
+	'ud-q5-k-xl',
+	'ud-q6-k-xl',
+	'ud-q8-k-xl',
+	'q8-0',
+	'ud-iq4-xs',
+	'ud-iq3-s',
+	'ud-q3-k-xl',
+	'ud-q2-k-xl',
+	'ud-iq1-s',
+	'mmproj-f16',
+	'ollama-27b',
+	'ollama-q8-0',
+)
 
 
 def default_serve_quant(available_ram_bytes: int) -> DownloadTarget:
