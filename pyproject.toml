@@ -155,6 +155,9 @@ markers = [
 testpaths = [
     "tests"
 ]
+pythonpath = [
+    "."
+]
 python_files = ["test_*.py", "*_test.py"]
 addopts = "-svx --strict-markers --tb=short --dist=loadscope"
 log_cli = true
