@@ -45,6 +45,8 @@ TIER_VRAM_GB_MAX=46
 OLLAMA_HOST="${OLLAMA_HOST:-127.0.0.1:11434}"
 OLLAMA_URL="http://${OLLAMA_HOST}"
 
+export PATH="${HOME}/.local/bin:${PATH}"
+
 _log() { printf '[qwen38] %s\n' "$*" >&2; }
 
 _model_for_tier() {
@@ -272,8 +274,13 @@ _cmd_verify() {
 	if _can_run_inference "${tier}"; then
 		_log "Running inference smoke test (num_ctx=${num_ctx})..."
 		if _smoke_inference "${model}" "${num_ctx}"; then
-			_log 'VERIFY: all checks passed (including inference).'
-			exit 0
+			_log 'Running ChatOllama Python smoke test...'
+			if QWEN38_TIER="${tier}" QWEN38_NUM_CTX="${num_ctx}" uv run python "${BASH_SOURCE%/*}/test-qwen38-chat.py"; then
+				_log 'VERIFY: all checks passed (curl + ChatOllama).'
+				exit 0
+			fi
+			_log 'FAIL: ChatOllama smoke test failed'
+			exit 1
 		fi
 		_log 'FAIL: inference smoke test failed (OOM? check dmesg / free -h)'
 		exit 1

@@ -3,10 +3,15 @@
 # Qwen3.8-27B setup (one non-overlapping MTP quant):
 #   ./bin/start-qwen38-local.sh setup
 #   ./bin/start-qwen38-local.sh verify
+#
+# Chat-only smoke (no browser):
+#   OLLAMA_SMOKE=1 uv run python examples/models/ollama.py
 
+import asyncio
 import os
 
 from browser_use import Agent, ChatOllama
+from browser_use.llm.messages import UserMessage
 
 _tier_model = {
 	'balanced': 'qwen3.8:27b-mtp-q4_K_M',
@@ -26,4 +31,13 @@ llm = ChatOllama(
 	},
 )
 
-Agent('find the founders of browser-use', llm=llm).run_sync()
+
+async def _smoke_chat() -> None:
+	result = await llm.ainvoke([UserMessage(content='Reply with exactly: OK')])
+	print(result.completion or '')
+
+
+if os.getenv('OLLAMA_SMOKE'):
+	asyncio.run(_smoke_chat())
+else:
+	Agent('find the founders of browser-use', llm=llm).run_sync()
